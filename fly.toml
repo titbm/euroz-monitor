@@ -1,0 +1,11 @@
+app = 'euroz-monitor'
+primary_region = 'ams'
+
+[build]
+
+[env]
+  CHECK_INTERVAL_MINUTES = '1'
+
+[mounts]
+  source = 'euroz_data'
+  destination = '/data'
