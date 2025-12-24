@@ -569,6 +569,7 @@ bot.onText(/\/status/, async (msg) => {
   }
 
   message += isSubscribed ? '\n\n🔔 You are subscribed' : '\n\n🔕 Not subscribed';
+  message += '\n\n_Special thanks to @nastr_';
   await bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
 });
 
