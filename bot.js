@@ -530,7 +530,7 @@ bot.onText(/\/status/, async (msg) => {
   if (websiteResult.success) {
     const websiteIcon = websiteResult.isMaintenance ? '🔴' : '🟢';
     const websiteState = websiteResult.isMaintenance ? 'MAINTENANCE' : 'ONLINE';
-    message += `\n\n🌐 *zashapon.com*: ${websiteIcon} ${websiteState}`;
+    message += `\n\n${websiteIcon} *zashapon.com*: ${websiteState}`;
   }
 
   // Show last known pause event
