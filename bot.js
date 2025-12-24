@@ -3,6 +3,7 @@ const TelegramBot = require('node-telegram-bot-api');
 const { ethers } = require('ethers');
 const fs = require('fs');
 const path = require('path');
+const https = require('https');
 
 // Config
 const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
@@ -63,6 +64,7 @@ let lastCheckedBlock = 0;
 let lastPauseEvent = null; // Store last known pause/unpause event
 let lastCheckedAuctionBlock = 0;
 let lastAuctionEvent = null; // Store last known auction creation event
+let lastWebsiteStatus = null; // Store last website status (true = maintenance, false = working)
 
 // Initial subscribers (backup)
 const INITIAL_SUBSCRIBERS = [];
@@ -120,6 +122,7 @@ function loadLastBlock() {
       lastCheckedAuctionBlock = data.auctionBlock || 0;
       // Use INITIAL_AUCTION_EVENT if lastAuctionEvent is null or undefined
       lastAuctionEvent = data.lastAuctionEvent || INITIAL_AUCTION_EVENT;
+      lastWebsiteStatus = data.websiteStatus !== undefined ? data.websiteStatus : null;
       console.log(`Loaded last block: ${lastCheckedBlock}, auction block: ${lastCheckedAuctionBlock}`);
       
       // If lastAuctionEvent was null in file, save the initial one
@@ -139,18 +142,20 @@ function loadLastBlock() {
 }
 
 // Save last checked block
-function saveLastBlock(block, pauseEvent = null, auctionBlock = null, auctionEvent = null) {
+function saveLastBlock(block, pauseEvent = null, auctionBlock = null, auctionEvent = null, websiteStatus = null) {
   try {
     if (block !== null) lastCheckedBlock = block;
     if (pauseEvent) lastPauseEvent = pauseEvent;
     if (auctionBlock !== null) lastCheckedAuctionBlock = auctionBlock;
     if (auctionEvent) lastAuctionEvent = auctionEvent;
+    if (websiteStatus !== null) lastWebsiteStatus = websiteStatus;
     
     fs.writeFileSync(LAST_BLOCK_FILE, JSON.stringify({ 
       block: lastCheckedBlock, 
       lastPauseEvent,
       auctionBlock: lastCheckedAuctionBlock,
-      lastAuctionEvent
+      lastAuctionEvent,
+      websiteStatus: lastWebsiteStatus
     }), 'utf8');
   } catch (err) {
     console.error('Error saving last block:', err.message);
@@ -226,6 +231,53 @@ async function sendToSubscribers(message) {
   console.log(`Sent to ${sent} subscribers, ${failed} failed`);
 }
 
+async function checkWebsiteStatus() {
+  return new Promise((resolve) => {
+    // Check API endpoint - returns 503 when site is under maintenance
+    const options = {
+      hostname: 'zashapon.com',
+      port: 443,
+      path: '/api/tickets/pending',
+      method: 'GET',
+      timeout: 10000,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+      }
+    };
+
+    const req = https.request(options, (res) => {
+      let data = '';
+      
+      res.on('data', (chunk) => {
+        data += chunk;
+      });
+
+      res.on('end', () => {
+        // API returns 503 when site is under maintenance
+        const isMaintenance = res.statusCode === 503;
+        
+        resolve({ 
+          success: true, 
+          isMaintenance,
+          statusCode: res.statusCode
+        });
+      });
+    });
+
+    req.on('error', (err) => {
+      console.error('Website check error:', err.message);
+      resolve({ success: false, error: err.message });
+    });
+
+    req.on('timeout', () => {
+      req.destroy();
+      resolve({ success: false, error: 'timeout' });
+    });
+
+    req.end();
+  });
+}
+
 async function monitorLoop() {
   console.log('Checking contract status...');
   const status = await checkAllContracts();
@@ -259,6 +311,37 @@ async function monitorLoop() {
 
   // Check owner transactions
   await checkOwnerTransactions();
+
+  // Check website status
+  await checkWebsite();
+}
+
+async function checkWebsite() {
+  const result = await checkWebsiteStatus();
+  
+  if (!result.success) {
+    console.log('Website check failed:', result.error);
+    return;
+  }
+
+  console.log(`Website status: ${result.isMaintenance ? 'MAINTENANCE' : 'WORKING'} (HTTP ${result.statusCode})`);
+
+  // Check if status changed from maintenance to working
+  if (lastWebsiteStatus === true && result.isMaintenance === false && subscribers.size > 0) {
+    console.log('Website is back online! Notifying subscribers...');
+    const message =
+      `✅ *САЙТ ZASHAPON.COM ЗАРАБОТАЛ!*\n\n` +
+      `🌐 Обслуживание завершено\n` +
+      `🔗 https://zashapon.com/\n\n` +
+      formatTime();
+
+    await sendToSubscribers(message);
+  }
+
+  // Save current status
+  if (result.isMaintenance !== lastWebsiteStatus) {
+    saveLastBlock(null, null, null, null, result.isMaintenance);
+  }
 }
 
 async function checkPauseEvents() {
@@ -430,7 +513,8 @@ bot.onText(/\/start/, async (msg) => {
       `/unsubscribe - Stop notifications\n\n` +
       `This bot monitors:\n` +
       `• EUROZ and cEUROZ contracts on Sepolia\n` +
-      `• Auction creation events`,
+      `• Auction creation events\n` +
+      `• zashapon.com website availability`,
     { parse_mode: 'Markdown' }
   );
 });
@@ -440,6 +524,14 @@ bot.onText(/\/status/, async (msg) => {
   const status = await checkAllContracts();
   const isSubscribed = subscribers.has(chatId);
   let message = formatStatus(status);
+
+  // Show website status
+  const websiteResult = await checkWebsiteStatus();
+  if (websiteResult.success) {
+    const websiteIcon = websiteResult.isMaintenance ? '🔴' : '🟢';
+    const websiteState = websiteResult.isMaintenance ? 'НА ОБСЛУЖИВАНИИ' : 'РАБОТАЕТ';
+    message += `\n\n🌐 *zashapon.com*: ${websiteIcon} ${websiteState}`;
+  }
 
   // Show last known pause event
   if (lastPauseEvent) {
@@ -489,7 +581,7 @@ bot.onText(/\/subscribe/, (msg) => {
     saveSubscribers();
     bot.sendMessage(
       chatId,
-      '🔔 *Subscribed!*\n\nYou will receive a notification when contracts are unpaused.',
+      '🔔 *Subscribed!*\n\nYou will receive notifications when:\n• Contracts are unpaused\n• New auctions are created\n• zashapon.com comes back online',
       { parse_mode: 'Markdown' }
     );
     console.log(`New subscriber: ${chatId}. Total: ${subscribers.size}`);
