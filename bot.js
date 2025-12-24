@@ -330,8 +330,8 @@ async function checkWebsite() {
   if (lastWebsiteStatus === true && result.isMaintenance === false && subscribers.size > 0) {
     console.log('Website is back online! Notifying subscribers...');
     const message =
-      `✅ *САЙТ ZASHAPON.COM ЗАРАБОТАЛ!*\n\n` +
-      `🌐 Обслуживание завершено\n` +
+      `✅ *ZASHAPON.COM IS BACK ONLINE!*\n\n` +
+      `🌐 Maintenance completed\n` +
       `🔗 https://zashapon.com/\n\n` +
       formatTime();
 
@@ -529,7 +529,7 @@ bot.onText(/\/status/, async (msg) => {
   const websiteResult = await checkWebsiteStatus();
   if (websiteResult.success) {
     const websiteIcon = websiteResult.isMaintenance ? '🔴' : '🟢';
-    const websiteState = websiteResult.isMaintenance ? 'НА ОБСЛУЖИВАНИИ' : 'РАБОТАЕТ';
+    const websiteState = websiteResult.isMaintenance ? 'MAINTENANCE' : 'ONLINE';
     message += `\n\n🌐 *zashapon.com*: ${websiteIcon} ${websiteState}`;
   }
 
