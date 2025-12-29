@@ -169,12 +169,26 @@ async function checkPaused(contractKey) {
   const contractInfo = CONTRACTS[contractKey];
   const contract = new ethers.Contract(contractInfo.address, PAUSED_ABI, provider);
 
-  if (contractInfo.pauseMethod === 'paused') {
-    return await contract.paused();
-  } else if (contractInfo.pauseMethod === 'pausableToken') {
-    const pausableAddr = await contract.pausableToken();
-    const pausableContract = new ethers.Contract(pausableAddr, PAUSED_ABI, provider);
-    return await pausableContract.paused();
+  // Retry logic for RPC calls
+  const maxRetries = 3;
+  for (let i = 0; i < maxRetries; i++) {
+    try {
+      if (contractInfo.pauseMethod === 'paused') {
+        return await contract.paused();
+      } else if (contractInfo.pauseMethod === 'pausableToken') {
+        const pausableAddr = await contract.pausableToken();
+        const pausableContract = new ethers.Contract(pausableAddr, PAUSED_ABI, provider);
+        return await pausableContract.paused();
+      }
+      return null;
+    } catch (err) {
+      if (i === maxRetries - 1) {
+        // Last retry failed
+        throw err;
+      }
+      // Wait before retry (exponential backoff)
+      await new Promise(resolve => setTimeout(resolve, 1000 * (i + 1)));
+    }
   }
   return null;
 }
@@ -282,11 +296,20 @@ async function monitorLoop() {
   console.log('Checking contract status...');
   const status = await checkAllContracts();
 
-  // Check for changes
+  // Check if we got valid status (not all null)
+  const hasValidStatus = Object.values(status).some(v => v !== null);
+  
+  if (!hasValidStatus) {
+    console.log('⚠️ All contracts returned null - RPC error, skipping this check');
+    return;
+  }
+
+  // Check for changes (only for non-null values)
   let changed = false;
   let unpaused = false;
   for (const key of Object.keys(status)) {
-    if (lastStatus[key] !== null && lastStatus[key] !== status[key]) {
+    // Ignore changes to/from null (RPC errors)
+    if (status[key] !== null && lastStatus[key] !== null && lastStatus[key] !== status[key]) {
       changed = true;
       if (lastStatus[key] === true && status[key] === false) {
         unpaused = true;
@@ -306,7 +329,13 @@ async function monitorLoop() {
     await sendToSubscribers(message);
   }
 
-  lastStatus = status;
+  // Only update lastStatus with valid (non-null) values
+  for (const key of Object.keys(status)) {
+    if (status[key] !== null) {
+      lastStatus[key] = status[key];
+    }
+  }
+  
   console.log('Status:', status, `| Subscribers: ${subscribers.size}`);
 
   // Check owner transactions
