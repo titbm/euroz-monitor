@@ -65,6 +65,7 @@ let lastPauseEvent = null; // Store last known pause/unpause event
 let lastCheckedAuctionBlock = 0;
 let lastAuctionEvent = null; // Store last known auction creation event
 let lastWebsiteStatus = null; // Store last website status (true = maintenance, false = working)
+let lastRelayerStatus = null; // Store last relayer status (true = working, false = 504)
 
 // Initial subscribers (backup)
 const INITIAL_SUBSCRIBERS = [];
@@ -83,6 +84,10 @@ const INITIAL_AUCTION_EVENT = {
   block: 9867417,
   timestamp: 1766072868000 // 2025-12-18T15:47:48Z
 };
+
+// Zama Relayer config
+const RELAYER_URL = 'https://relayer.testnet.zama.org/v1/public-decrypt';
+const TEST_CIPHERTEXT = '0xc1ee89a0982f0fb69245059a4fad946fe7a8b51df4ff0000000000aa36a70400';
 
 // Load subscribers from file
 function loadSubscribers() {
@@ -123,6 +128,7 @@ function loadLastBlock() {
       // Use INITIAL_AUCTION_EVENT if lastAuctionEvent is null or undefined
       lastAuctionEvent = data.lastAuctionEvent || INITIAL_AUCTION_EVENT;
       lastWebsiteStatus = data.websiteStatus !== undefined ? data.websiteStatus : null;
+      lastRelayerStatus = data.relayerStatus !== undefined ? data.relayerStatus : null;
       console.log(`Loaded last block: ${lastCheckedBlock}, auction block: ${lastCheckedAuctionBlock}`);
       
       // If lastAuctionEvent was null in file, save the initial one
@@ -142,20 +148,22 @@ function loadLastBlock() {
 }
 
 // Save last checked block
-function saveLastBlock(block, pauseEvent = null, auctionBlock = null, auctionEvent = null, websiteStatus = null) {
+function saveLastBlock(block, pauseEvent = null, auctionBlock = null, auctionEvent = null, websiteStatus = null, relayerStatus = null) {
   try {
     if (block !== null) lastCheckedBlock = block;
     if (pauseEvent) lastPauseEvent = pauseEvent;
     if (auctionBlock !== null) lastCheckedAuctionBlock = auctionBlock;
     if (auctionEvent) lastAuctionEvent = auctionEvent;
     if (websiteStatus !== null) lastWebsiteStatus = websiteStatus;
+    if (relayerStatus !== null) lastRelayerStatus = relayerStatus;
     
     fs.writeFileSync(LAST_BLOCK_FILE, JSON.stringify({ 
       block: lastCheckedBlock, 
       lastPauseEvent,
       auctionBlock: lastCheckedAuctionBlock,
       lastAuctionEvent,
-      websiteStatus: lastWebsiteStatus
+      websiteStatus: lastWebsiteStatus,
+      relayerStatus: lastRelayerStatus
     }), 'utf8');
   } catch (err) {
     console.error('Error saving last block:', err.message);
@@ -343,6 +351,9 @@ async function monitorLoop() {
 
   // Check website status
   await checkWebsite();
+
+  // Check Zama Relayer status
+  await checkRelayer();
 }
 
 async function checkWebsite() {
@@ -370,6 +381,90 @@ async function checkWebsite() {
   // Save current status
   if (result.isMaintenance !== lastWebsiteStatus) {
     saveLastBlock(null, null, null, null, result.isMaintenance);
+  }
+}
+
+async function checkRelayerStatus() {
+  return new Promise((resolve) => {
+    const postData = JSON.stringify({
+      ciphertextHandles: [TEST_CIPHERTEXT],
+      extraData: '0x00'
+    });
+
+    const options = {
+      hostname: 'relayer.testnet.zama.org',
+      port: 443,
+      path: '/v1/public-decrypt',
+      method: 'POST',
+      timeout: 15000,
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(postData)
+      }
+    };
+
+    const req = https.request(options, (res) => {
+      let data = '';
+      
+      res.on('data', (chunk) => {
+        data += chunk;
+      });
+
+      res.on('end', () => {
+        const isWorking = res.statusCode === 200;
+        const is504 = res.statusCode === 504;
+        
+        resolve({ 
+          success: true, 
+          isWorking,
+          is504,
+          statusCode: res.statusCode,
+          data: data ? data.substring(0, 100) : ''
+        });
+      });
+    });
+
+    req.on('error', (err) => {
+      console.error('Relayer check error:', err.message);
+      resolve({ success: false, error: err.message });
+    });
+
+    req.on('timeout', () => {
+      req.destroy();
+      resolve({ success: false, error: 'timeout' });
+    });
+
+    req.write(postData);
+    req.end();
+  });
+}
+
+async function checkRelayer() {
+  const result = await checkRelayerStatus();
+  
+  if (!result.success) {
+    console.log('Relayer check failed:', result.error);
+    return;
+  }
+
+  console.log(`Relayer status: ${result.isWorking ? 'WORKING' : result.is504 ? '504 TIMEOUT' : `HTTP ${result.statusCode}`}`);
+
+  // Check if status changed from 504 to working
+  if (lastRelayerStatus === false && result.isWorking === true && subscribers.size > 0) {
+    console.log('Relayer is back online! Notifying subscribers...');
+    const message =
+      `✅ *ZAMA RELAYER IS BACK ONLINE!*\n\n` +
+      `🔓 Decryption service restored\n` +
+      `🔗 ${RELAYER_URL}\n\n` +
+      `You can now decrypt cEUROZ balances and other confidential data.\n\n` +
+      formatTime();
+
+    await sendToSubscribers(message);
+  }
+
+  // Save current status (true = working, false = 504/error)
+  if (result.isWorking !== lastRelayerStatus) {
+    saveLastBlock(null, null, null, null, null, result.isWorking);
   }
 }
 
@@ -543,7 +638,8 @@ bot.onText(/\/start/, async (msg) => {
       `This bot monitors:\n` +
       `• EUROZ and cEUROZ contracts on Sepolia\n` +
       `• Auction creation events\n` +
-      `• zashapon.com website availability`,
+      `• zashapon.com website availability\n` +
+      `• Zama Relayer decryption service`,
     { parse_mode: 'Markdown' }
   );
 });
@@ -560,6 +656,14 @@ bot.onText(/\/status/, async (msg) => {
     const websiteIcon = websiteResult.isMaintenance ? '🔴' : '🟢';
     const websiteState = websiteResult.isMaintenance ? 'MAINTENANCE' : 'ONLINE';
     message += `\n\n${websiteIcon} *zashapon.com*: ${websiteState}`;
+  }
+
+  // Show Zama Relayer status
+  const relayerResult = await checkRelayerStatus();
+  if (relayerResult.success) {
+    const relayerIcon = relayerResult.isWorking ? '🟢' : relayerResult.is504 ? '🔴' : '❓';
+    const relayerState = relayerResult.isWorking ? 'WORKING' : relayerResult.is504 ? '504 TIMEOUT' : `HTTP ${relayerResult.statusCode}`;
+    message += `\n${relayerIcon} *Zama Relayer*: ${relayerState}`;
   }
 
   // Show last known pause event
@@ -611,7 +715,7 @@ bot.onText(/\/subscribe/, (msg) => {
     saveSubscribers();
     bot.sendMessage(
       chatId,
-      '🔔 *Subscribed!*\n\nYou will receive notifications when:\n• Contracts are unpaused\n• New auctions are created\n• zashapon.com comes back online',
+      '🔔 *Subscribed!*\n\nYou will receive notifications when:\n• Contracts are unpaused\n• New auctions are created\n• zashapon.com comes back online\n• Zama Relayer recovers from 504',
       { parse_mode: 'Markdown' }
     );
     console.log(`New subscriber: ${chatId}. Total: ${subscribers.size}`);
