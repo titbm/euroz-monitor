@@ -65,7 +65,8 @@ let lastPauseEvent = null; // Store last known pause/unpause event
 let lastCheckedAuctionBlock = 0;
 let lastAuctionEvent = null; // Store last known auction creation event
 let lastWebsiteStatus = null; // Store last website status (true = maintenance, false = working)
-let lastRelayerStatus = null; // Store last relayer status (true = working, false = 504)
+let lastCheckedNFTBlock = 0;
+let lastNFTMint = null; // Store last known NFT mint event
 
 // Initial subscribers (backup)
 const INITIAL_SUBSCRIBERS = [];
@@ -85,9 +86,9 @@ const INITIAL_AUCTION_EVENT = {
   timestamp: 1766072868000 // 2025-12-18T15:47:48Z
 };
 
-// Zama Relayer config
-const RELAYER_URL = 'https://relayer.testnet.zama.org/v1/public-decrypt';
-const TEST_CIPHERTEXT = '0xc1ee89a0982f0fb69245059a4fad946fe7a8b51df4ff0000000000aa36a70400';
+// Gachapon NFT config
+const GACHAPON_NFT_ADDRESS = '0xfdd14d2a2e1ea940392f4c8851cc217dde474541';
+const TRANSFER_SINGLE_EVENT = '0xc3d58168c5ae7397731d063d5bbf3d657854427343f4c083240f7aacaa2d0f62'; // TransferSingle event signature
 
 // Load subscribers from file
 function loadSubscribers() {
@@ -128,7 +129,8 @@ function loadLastBlock() {
       // Use INITIAL_AUCTION_EVENT if lastAuctionEvent is null or undefined
       lastAuctionEvent = data.lastAuctionEvent || INITIAL_AUCTION_EVENT;
       lastWebsiteStatus = data.websiteStatus !== undefined ? data.websiteStatus : null;
-      lastRelayerStatus = data.relayerStatus !== undefined ? data.relayerStatus : null;
+      lastCheckedNFTBlock = data.nftBlock || 0;
+      lastNFTMint = data.lastNFTMint || null;
       console.log(`Loaded last block: ${lastCheckedBlock}, auction block: ${lastCheckedAuctionBlock}`);
       
       // If lastAuctionEvent was null in file, save the initial one
@@ -148,14 +150,15 @@ function loadLastBlock() {
 }
 
 // Save last checked block
-function saveLastBlock(block, pauseEvent = null, auctionBlock = null, auctionEvent = null, websiteStatus = null, relayerStatus = null) {
+function saveLastBlock(block, pauseEvent = null, auctionBlock = null, auctionEvent = null, websiteStatus = null, nftBlock = null, nftMint = null) {
   try {
     if (block !== null) lastCheckedBlock = block;
     if (pauseEvent) lastPauseEvent = pauseEvent;
     if (auctionBlock !== null) lastCheckedAuctionBlock = auctionBlock;
     if (auctionEvent) lastAuctionEvent = auctionEvent;
     if (websiteStatus !== null) lastWebsiteStatus = websiteStatus;
-    if (relayerStatus !== null) lastRelayerStatus = relayerStatus;
+    if (nftBlock !== null) lastCheckedNFTBlock = nftBlock;
+    if (nftMint) lastNFTMint = nftMint;
     
     fs.writeFileSync(LAST_BLOCK_FILE, JSON.stringify({ 
       block: lastCheckedBlock, 
@@ -163,7 +166,8 @@ function saveLastBlock(block, pauseEvent = null, auctionBlock = null, auctionEve
       auctionBlock: lastCheckedAuctionBlock,
       lastAuctionEvent,
       websiteStatus: lastWebsiteStatus,
-      relayerStatus: lastRelayerStatus
+      nftBlock: lastCheckedNFTBlock,
+      lastNFTMint
     }), 'utf8');
   } catch (err) {
     console.error('Error saving last block:', err.message);
@@ -352,8 +356,8 @@ async function monitorLoop() {
   // Check website status
   await checkWebsite();
 
-  // Check Zama Relayer status
-  await checkRelayer();
+  // Check NFT mints
+  await checkNFTMints();
 }
 
 async function checkWebsite() {
@@ -384,87 +388,93 @@ async function checkWebsite() {
   }
 }
 
-async function checkRelayerStatus() {
-  return new Promise((resolve) => {
-    const postData = JSON.stringify({
-      ciphertextHandles: [TEST_CIPHERTEXT],
-      extraData: '0x00'
-    });
+async function checkNFTMints() {
+  try {
+    const currentBlock = await provider.getBlockNumber();
+    
+    // On first run, just save current block and skip
+    if (lastCheckedNFTBlock === 0) {
+      saveLastBlock(null, null, null, null, null, currentBlock);
+      console.log(`First NFT check, starting from block ${currentBlock}`);
+      return [];
+    }
 
-    const options = {
-      hostname: 'relayer.testnet.zama.org',
-      port: 443,
-      path: '/v1/public-decrypt',
-      method: 'POST',
-      timeout: 15000,
-      headers: {
-        'Content-Type': 'application/json',
-        'Content-Length': Buffer.byteLength(postData)
-      }
+    // Search only from last checked block to current
+    const fromBlock = lastCheckedNFTBlock + 1;
+    if (fromBlock > currentBlock) return [];
+
+    // Filter for TransferSingle events (ERC-1155 mints)
+    // TransferSingle(address operator, address from, address to, uint256 id, uint256 value)
+    const filter = {
+      address: GACHAPON_NFT_ADDRESS,
+      topics: [
+        TRANSFER_SINGLE_EVENT,
+        null, // operator (any)
+        ethers.zeroPadValue('0x0000000000000000000000000000000000000000', 32) // from (null address = mint)
+      ],
+      fromBlock,
+      toBlock: currentBlock
     };
 
-    const req = https.request(options, (res) => {
-      let data = '';
+    const logs = await provider.getLogs(filter);
+    const events = [];
+
+    for (const log of logs) {
+      const block = await provider.getBlock(log.blockNumber);
       
-      res.on('data', (chunk) => {
-        data += chunk;
-      });
+      // Decode the event data
+      // topics[2] is 'to' address, topics[3] is token id
+      const toAddress = '0x' + log.topics[2].slice(26);
+      const tokenId = parseInt(log.topics[3], 16);
+      
+      const event = {
+        hash: log.transactionHash,
+        block: log.blockNumber,
+        timestamp: block.timestamp * 1000,
+        to: toAddress,
+        tokenId: tokenId
+      };
+      events.push(event);
+      
+      // Update last known NFT mint
+      lastNFTMint = event;
+      console.log(`Found NFT mint: Token ID ${tokenId} to ${toAddress} at block ${log.blockNumber}`);
+    }
 
-      res.on('end', () => {
-        const isWorking = res.statusCode === 200;
-        const is504 = res.statusCode === 504;
-        
-        resolve({ 
-          success: true, 
-          isWorking,
-          is504,
-          statusCode: res.statusCode,
-          data: data ? data.substring(0, 100) : ''
-        });
-      });
-    });
+    // Save current block as last checked
+    saveLastBlock(null, null, null, null, null, currentBlock, lastNFTMint);
+    
+    // Notify about new NFT mints
+    if (events.length > 0 && subscribers.size > 0) {
+      for (const event of events) {
+        const date = new Date(event.timestamp);
+        const day = date.getUTCDate().toString().padStart(2, '0');
+        const month = (date.getUTCMonth() + 1).toString().padStart(2, '0');
+        const year = date.getUTCFullYear();
+        const hours = date.getUTCHours().toString().padStart(2, '0');
+        const minutes = date.getUTCMinutes().toString().padStart(2, '0');
+        const seconds = date.getUTCSeconds().toString().padStart(2, '0');
+        const dateTimeStr = `${day}.${month}.${year} - ${hours}:${minutes}:${seconds} UTC`;
 
-    req.on('error', (err) => {
-      console.error('Relayer check error:', err.message);
-      resolve({ success: false, error: err.message });
-    });
+        const message =
+          `🎁 *NEW NFT MINTED!*\n\n` +
+          `🎨 Gachapon Zama Token ID: #${event.tokenId}\n` +
+          `👤 Minted to: \`${event.to}\`\n` +
+          `📦 Block: ${event.block}\n` +
+          `🕐 ${dateTimeStr}\n\n` +
+          `🔗 [View transaction](https://sepolia.etherscan.io/tx/${event.hash})\n` +
+          `🖼️ [View NFT](https://sepolia.etherscan.io/nft/${GACHAPON_NFT_ADDRESS}/${event.tokenId})\n\n` +
+          formatTime();
 
-    req.on('timeout', () => {
-      req.destroy();
-      resolve({ success: false, error: 'timeout' });
-    });
-
-    req.write(postData);
-    req.end();
-  });
-}
-
-async function checkRelayer() {
-  const result = await checkRelayerStatus();
-  
-  if (!result.success) {
-    console.log('Relayer check failed:', result.error);
-    return;
-  }
-
-  console.log(`Relayer status: ${result.isWorking ? 'WORKING' : result.is504 ? '504 TIMEOUT' : `HTTP ${result.statusCode}`}`);
-
-  // Check if status changed from 504 to working
-  if (lastRelayerStatus === false && result.isWorking === true && subscribers.size > 0) {
-    console.log('Relayer is back online! Notifying subscribers...');
-    const message =
-      `✅ *ZAMA RELAYER IS BACK ONLINE!*\n\n` +
-      `🔓 Decryption service restored\n` +
-      `🔗 ${RELAYER_URL}\n\n` +
-      `You can now decrypt cEUROZ balances and other confidential data.\n\n` +
-      formatTime();
-
-    await sendToSubscribers(message);
-  }
-
-  // Save current status (true = working, false = 504/error)
-  if (result.isWorking !== lastRelayerStatus) {
-    saveLastBlock(null, null, null, null, null, result.isWorking);
+        await sendToSubscribers(message);
+        console.log(`NFT mint alert: Token ID ${event.tokenId}`);
+      }
+    }
+    
+    return events;
+  } catch (err) {
+    console.error('Error checking NFT mints:', err.message);
+    return [];
   }
 }
 
@@ -639,7 +649,7 @@ bot.onText(/\/start/, async (msg) => {
       `• EUROZ and cEUROZ contracts on Sepolia\n` +
       `• Auction creation events\n` +
       `• zashapon.com website availability\n` +
-      `• Zama Relayer decryption service`,
+      `• Gachapon Zama NFT mints`,
     { parse_mode: 'Markdown' }
   );
 });
@@ -658,12 +668,20 @@ bot.onText(/\/status/, async (msg) => {
     message += `\n\n${websiteIcon} *zashapon.com*: ${websiteState}`;
   }
 
-  // Show Zama Relayer status
-  const relayerResult = await checkRelayerStatus();
-  if (relayerResult.success) {
-    const relayerIcon = relayerResult.isWorking ? '🟢' : relayerResult.is504 ? '🔴' : '❓';
-    const relayerState = relayerResult.isWorking ? 'WORKING' : relayerResult.is504 ? '504 TIMEOUT' : `HTTP ${relayerResult.statusCode}`;
-    message += `\n${relayerIcon} *Zama Relayer*: ${relayerState}`;
+  // Show last NFT mint
+  if (lastNFTMint) {
+    const date = new Date(lastNFTMint.timestamp);
+    const day = date.getUTCDate().toString().padStart(2, '0');
+    const month = (date.getUTCMonth() + 1).toString().padStart(2, '0');
+    const year = date.getUTCFullYear();
+    const hours = date.getUTCHours().toString().padStart(2, '0');
+    const minutes = date.getUTCMinutes().toString().padStart(2, '0');
+    const seconds = date.getUTCSeconds().toString().padStart(2, '0');
+    const dateTimeStr = `${day}.${month}.${year} - ${hours}:${minutes}:${seconds} UTC`;
+
+    message += `\n\n🎁 *Last NFT minted:*\n`;
+    message += `🎨 Token ID #${lastNFTMint.tokenId} - ${dateTimeStr}\n`;
+    message += `[View NFT](https://sepolia.etherscan.io/nft/${GACHAPON_NFT_ADDRESS}/${lastNFTMint.tokenId})`;
   }
 
   // Show last known pause event
@@ -715,7 +733,7 @@ bot.onText(/\/subscribe/, (msg) => {
     saveSubscribers();
     bot.sendMessage(
       chatId,
-      '🔔 *Subscribed!*\n\nYou will receive notifications when:\n• Contracts are unpaused\n• New auctions are created\n• zashapon.com comes back online\n• Zama Relayer recovers from 504',
+      '🔔 *Subscribed!*\n\nYou will receive notifications when:\n• Contracts are unpaused\n• New auctions are created\n• zashapon.com comes back online\n• New Gachapon NFTs are minted',
       { parse_mode: 'Markdown' }
     );
     console.log(`New subscriber: ${chatId}. Total: ${subscribers.size}`);
@@ -739,6 +757,7 @@ console.log('🤖 EUROZ Monitor Bot started!');
 console.log(`Checking every ${CHECK_INTERVAL / 60000} minutes`);
 console.log(`Monitoring owner: ${OWNER_ADDRESS}`);
 console.log(`Monitoring auction bot: ${AUCTION_BOT_ADDRESS}`);
+console.log(`Monitoring Gachapon NFT: ${GACHAPON_NFT_ADDRESS}`);
 
 loadSubscribers();
 loadLastBlock();
