@@ -144,38 +144,11 @@ function loadLastBlock() {
       lastNFTMint = data.lastNFTMint || INITIAL_NFT_MINT;
       lastNFTMintTime = data.lastNFTMintTime || null;
       nftMintingActive = data.nftMintingActive || false;
-      
-      // FIX: Correct any wrong timestamp (force use INITIAL_NFT_MINT if timestamp doesn't match)
-      const CORRECT_TIMESTAMP = 1767112176000; // Dec-30-2025 04:29:36 PM UTC
-      let needsSave = false;
-      
-      console.log(`DEBUG: Loaded NFT mint data:`, JSON.stringify(lastNFTMint));
-      console.log(`DEBUG: Expected timestamp: ${CORRECT_TIMESTAMP}, Got: ${lastNFTMint?.timestamp}`);
-      
-      if (lastNFTMint && lastNFTMint.timestamp !== CORRECT_TIMESTAMP) {
-        console.log(`⚠️ Detected incorrect NFT mint timestamp: ${lastNFTMint.timestamp}, correcting to ${CORRECT_TIMESTAMP}...`);
-        lastNFTMint = INITIAL_NFT_MINT;
-        needsSave = true;
-      }
-      
-      if (lastNFTMintTime && lastNFTMintTime !== CORRECT_TIMESTAMP) {
-        console.log(`⚠️ Detected incorrect NFT mint time: ${lastNFTMintTime}, correcting to ${CORRECT_TIMESTAMP}...`);
-        lastNFTMintTime = CORRECT_TIMESTAMP;
-        needsSave = true;
-      }
-      
       console.log(`Loaded last block: ${lastCheckedBlock}, auction block: ${lastCheckedAuctionBlock}`);
       
       // If lastAuctionEvent was null in file, save the initial one
       if (!data.lastAuctionEvent) {
         saveLastBlock(null, null, null, INITIAL_AUCTION_EVENT);
-        needsSave = false; // Already saving
-      }
-      
-      // Save corrected data if needed
-      if (needsSave) {
-        console.log('✅ Saving corrected timestamp to file...');
-        saveLastBlock(null, null, null, null, null, null, lastNFTMint, lastNFTMintTime);
       }
     } else {
       // Use initial events
@@ -734,7 +707,6 @@ bot.onText(/\/status/, async (msg) => {
   // Show last NFT mint
   if (lastNFTMint) {
     const date = new Date(lastNFTMint.timestamp);
-    console.log(`DEBUG /status: lastNFTMint.timestamp = ${lastNFTMint.timestamp}, date object = ${date.toISOString()}`);
     const day = date.getUTCDate().toString().padStart(2, '0');
     const month = (date.getUTCMonth() + 1).toString().padStart(2, '0');
     const year = date.getUTCFullYear();
@@ -742,7 +714,6 @@ bot.onText(/\/status/, async (msg) => {
     const minutes = date.getUTCMinutes().toString().padStart(2, '0');
     const seconds = date.getUTCSeconds().toString().padStart(2, '0');
     const dateTimeStr = `${day}.${month}.${year} - ${hours}:${minutes}:${seconds} UTC`;
-    console.log(`DEBUG /status: Formatted string = ${dateTimeStr}`);
 
     message += `\n\n🎁 *Last NFT minted:*\n`;
     message += `🎨 Token ID #${lastNFTMint.tokenId} - ${dateTimeStr}\n`;
