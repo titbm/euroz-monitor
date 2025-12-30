@@ -144,11 +144,35 @@ function loadLastBlock() {
       lastNFTMint = data.lastNFTMint || INITIAL_NFT_MINT;
       lastNFTMintTime = data.lastNFTMintTime || null;
       nftMintingActive = data.nftMintingActive || false;
+      
+      // FIX: Correct any wrong timestamp (force use INITIAL_NFT_MINT if timestamp doesn't match)
+      const CORRECT_TIMESTAMP = 1735575576000; // Dec-30-2025 04:29:36 PM UTC
+      let needsSave = false;
+      
+      if (lastNFTMint && lastNFTMint.timestamp !== CORRECT_TIMESTAMP) {
+        console.log(`⚠️ Detected incorrect NFT mint timestamp: ${lastNFTMint.timestamp}, correcting to ${CORRECT_TIMESTAMP}...`);
+        lastNFTMint = INITIAL_NFT_MINT;
+        needsSave = true;
+      }
+      
+      if (lastNFTMintTime && lastNFTMintTime !== CORRECT_TIMESTAMP) {
+        console.log(`⚠️ Detected incorrect NFT mint time: ${lastNFTMintTime}, correcting to ${CORRECT_TIMESTAMP}...`);
+        lastNFTMintTime = CORRECT_TIMESTAMP;
+        needsSave = true;
+      }
+      
       console.log(`Loaded last block: ${lastCheckedBlock}, auction block: ${lastCheckedAuctionBlock}`);
       
       // If lastAuctionEvent was null in file, save the initial one
       if (!data.lastAuctionEvent) {
         saveLastBlock(null, null, null, INITIAL_AUCTION_EVENT);
+        needsSave = false; // Already saving
+      }
+      
+      // Save corrected data if needed
+      if (needsSave) {
+        console.log('✅ Saving corrected timestamp to file...');
+        saveLastBlock(null, null, null, null, null, null, lastNFTMint, lastNFTMintTime);
       }
     } else {
       // Use initial events
