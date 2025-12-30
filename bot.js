@@ -149,6 +149,9 @@ function loadLastBlock() {
       const CORRECT_TIMESTAMP = 1735575576000; // Dec-30-2025 04:29:36 PM UTC
       let needsSave = false;
       
+      console.log(`DEBUG: Loaded NFT mint data:`, JSON.stringify(lastNFTMint));
+      console.log(`DEBUG: Expected timestamp: ${CORRECT_TIMESTAMP}, Got: ${lastNFTMint?.timestamp}`);
+      
       if (lastNFTMint && lastNFTMint.timestamp !== CORRECT_TIMESTAMP) {
         console.log(`⚠️ Detected incorrect NFT mint timestamp: ${lastNFTMint.timestamp}, correcting to ${CORRECT_TIMESTAMP}...`);
         lastNFTMint = INITIAL_NFT_MINT;
