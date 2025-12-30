@@ -67,6 +67,8 @@ let lastAuctionEvent = null; // Store last known auction creation event
 let lastWebsiteStatus = null; // Store last website status (true = maintenance, false = working)
 let lastCheckedNFTBlock = 0;
 let lastNFTMint = null; // Store last known NFT mint event
+let lastNFTMintTime = null; // Timestamp of last mint
+let nftMintingActive = false; // Track if minting is currently active
 
 // Initial subscribers (backup)
 const INITIAL_SUBSCRIBERS = [];
@@ -140,6 +142,8 @@ function loadLastBlock() {
       lastWebsiteStatus = data.websiteStatus !== undefined ? data.websiteStatus : null;
       lastCheckedNFTBlock = data.nftBlock || 0;
       lastNFTMint = data.lastNFTMint || INITIAL_NFT_MINT;
+      lastNFTMintTime = data.lastNFTMintTime || null;
+      nftMintingActive = data.nftMintingActive || false;
       console.log(`Loaded last block: ${lastCheckedBlock}, auction block: ${lastCheckedAuctionBlock}`);
       
       // If lastAuctionEvent was null in file, save the initial one
@@ -160,7 +164,7 @@ function loadLastBlock() {
 }
 
 // Save last checked block
-function saveLastBlock(block, pauseEvent = null, auctionBlock = null, auctionEvent = null, websiteStatus = null, nftBlock = null, nftMint = null) {
+function saveLastBlock(block, pauseEvent = null, auctionBlock = null, auctionEvent = null, websiteStatus = null, nftBlock = null, nftMint = null, nftMintTime = null, mintingActive = null) {
   try {
     if (block !== null) lastCheckedBlock = block;
     if (pauseEvent) lastPauseEvent = pauseEvent;
@@ -169,6 +173,8 @@ function saveLastBlock(block, pauseEvent = null, auctionBlock = null, auctionEve
     if (websiteStatus !== null) lastWebsiteStatus = websiteStatus;
     if (nftBlock !== null) lastCheckedNFTBlock = nftBlock;
     if (nftMint) lastNFTMint = nftMint;
+    if (nftMintTime !== null) lastNFTMintTime = nftMintTime;
+    if (mintingActive !== null) nftMintingActive = mintingActive;
     
     fs.writeFileSync(LAST_BLOCK_FILE, JSON.stringify({ 
       block: lastCheckedBlock, 
@@ -177,7 +183,9 @@ function saveLastBlock(block, pauseEvent = null, auctionBlock = null, auctionEve
       lastAuctionEvent,
       websiteStatus: lastWebsiteStatus,
       nftBlock: lastCheckedNFTBlock,
-      lastNFTMint
+      lastNFTMint,
+      lastNFTMintTime,
+      nftMintingActive
     }), 'utf8');
   } catch (err) {
     console.error('Error saving last block:', err.message);
@@ -401,6 +409,19 @@ async function checkWebsite() {
 async function checkNFTMints() {
   try {
     const currentBlock = await provider.getBlockNumber();
+    const now = Date.now();
+    
+    // Check if minting has been inactive for 30+ minutes
+    if (lastNFTMintTime && nftMintingActive) {
+      const timeSinceLastMint = now - lastNFTMintTime;
+      const THIRTY_MINUTES = 30 * 60 * 1000;
+      
+      if (timeSinceLastMint > THIRTY_MINUTES) {
+        console.log('NFT minting inactive for 30+ minutes, resetting state');
+        nftMintingActive = false;
+        saveLastBlock(null, null, null, null, null, null, null, null, false);
+      }
+    }
     
     // On first run, just save current block and skip
     if (lastCheckedNFTBlock === 0) {
@@ -448,36 +469,41 @@ async function checkNFTMints() {
       
       // Update last known NFT mint
       lastNFTMint = event;
+      lastNFTMintTime = event.timestamp;
       console.log(`Found NFT mint: Token ID ${tokenId} to ${toAddress} at block ${log.blockNumber}`);
     }
 
     // Save current block as last checked
-    saveLastBlock(null, null, null, null, null, currentBlock, lastNFTMint);
+    saveLastBlock(null, null, null, null, null, currentBlock, lastNFTMint, lastNFTMintTime);
     
-    // Notify about new NFT mints
-    if (events.length > 0 && subscribers.size > 0) {
-      for (const event of events) {
-        const date = new Date(event.timestamp);
-        const day = date.getUTCDate().toString().padStart(2, '0');
-        const month = (date.getUTCMonth() + 1).toString().padStart(2, '0');
-        const year = date.getUTCFullYear();
-        const hours = date.getUTCHours().toString().padStart(2, '0');
-        const minutes = date.getUTCMinutes().toString().padStart(2, '0');
-        const seconds = date.getUTCSeconds().toString().padStart(2, '0');
-        const dateTimeStr = `${day}.${month}.${year} - ${hours}:${minutes}:${seconds} UTC`;
-
+    // Notify only if minting just started (was inactive, now active)
+    if (events.length > 0) {
+      if (!nftMintingActive && subscribers.size > 0) {
+        // Minting just started after being inactive
+        console.log('NFT minting started! Sending notification...');
+        
+        const totalMints = events.length;
+        const firstMint = events[0];
+        const lastMint = events[events.length - 1];
+        
         const message =
-          `🎁 *NEW NFT MINTED!*\n\n` +
-          `🎨 Gachapon Zama Token ID: #${event.tokenId}\n` +
-          `👤 Minted to: \`${event.to}\`\n` +
-          `📦 Block: ${event.block}\n` +
-          `🕐 ${dateTimeStr}\n\n` +
-          `🔗 [View transaction](https://sepolia.etherscan.io/tx/${event.hash})\n` +
-          `🖼️ [View NFT](https://sepolia.etherscan.io/nft/${GACHAPON_NFT_ADDRESS}/${event.tokenId})\n\n` +
+          `🎁 *NFT MINTING STARTED!*\n\n` +
+          `🎨 Gachapon Zama NFTs are being minted\n` +
+          `📊 ${totalMints} mint${totalMints > 1 ? 's' : ''} detected in this check\n` +
+          `🆔 Latest Token ID: #${lastMint.tokenId}\n` +
+          `📦 Block: ${lastMint.block}\n\n` +
+          `🔗 [View latest mint](https://sepolia.etherscan.io/tx/${lastMint.hash})\n` +
+          `🖼️ [View NFT](https://sepolia.etherscan.io/nft/${GACHAPON_NFT_ADDRESS}/${lastMint.tokenId})\n\n` +
           formatTime();
 
         await sendToSubscribers(message);
-        console.log(`NFT mint alert: Token ID ${event.tokenId}`);
+        
+        // Mark minting as active
+        nftMintingActive = true;
+        saveLastBlock(null, null, null, null, null, null, null, null, true);
+      } else {
+        // Minting is already active, just log
+        console.log(`NFT minting active: ${events.length} new mint(s), not sending notification`);
       }
     }
     
