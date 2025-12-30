@@ -734,6 +734,7 @@ bot.onText(/\/status/, async (msg) => {
   // Show last NFT mint
   if (lastNFTMint) {
     const date = new Date(lastNFTMint.timestamp);
+    console.log(`DEBUG /status: lastNFTMint.timestamp = ${lastNFTMint.timestamp}, date object = ${date.toISOString()}`);
     const day = date.getUTCDate().toString().padStart(2, '0');
     const month = (date.getUTCMonth() + 1).toString().padStart(2, '0');
     const year = date.getUTCFullYear();
@@ -741,6 +742,7 @@ bot.onText(/\/status/, async (msg) => {
     const minutes = date.getUTCMinutes().toString().padStart(2, '0');
     const seconds = date.getUTCSeconds().toString().padStart(2, '0');
     const dateTimeStr = `${day}.${month}.${year} - ${hours}:${minutes}:${seconds} UTC`;
+    console.log(`DEBUG /status: Formatted string = ${dateTimeStr}`);
 
     message += `\n\n🎁 *Last NFT minted:*\n`;
     message += `🎨 Token ID #${lastNFTMint.tokenId} - ${dateTimeStr}\n`;
