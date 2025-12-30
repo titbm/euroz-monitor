@@ -86,6 +86,15 @@ const INITIAL_AUCTION_EVENT = {
   timestamp: 1766072868000 // 2025-12-18T15:47:48Z
 };
 
+// Last known NFT mint (from block 9946324)
+const INITIAL_NFT_MINT = {
+  hash: '0x28c4d13c35dc8e463cf052c4dc7cf7ff2ca5dbdba49d1155f078eaf2fdc88857',
+  block: 9946324,
+  timestamp: 1735588988000, // 2025-12-30T16:43:08Z (approximate)
+  to: '0xB76A0af3440ba1f1a59a38dd5b7a2f1a8d8f8361',
+  tokenId: 4
+};
+
 // Gachapon NFT config
 const GACHAPON_NFT_ADDRESS = '0xfdd14d2a2e1ea940392f4c8851cc217dde474541';
 const TRANSFER_SINGLE_EVENT = '0xc3d58168c5ae7397731d063d5bbf3d657854427343f4c083240f7aacaa2d0f62'; // TransferSingle event signature
@@ -130,7 +139,7 @@ function loadLastBlock() {
       lastAuctionEvent = data.lastAuctionEvent || INITIAL_AUCTION_EVENT;
       lastWebsiteStatus = data.websiteStatus !== undefined ? data.websiteStatus : null;
       lastCheckedNFTBlock = data.nftBlock || 0;
-      lastNFTMint = data.lastNFTMint || null;
+      lastNFTMint = data.lastNFTMint || INITIAL_NFT_MINT;
       console.log(`Loaded last block: ${lastCheckedBlock}, auction block: ${lastCheckedAuctionBlock}`);
       
       // If lastAuctionEvent was null in file, save the initial one
@@ -141,6 +150,7 @@ function loadLastBlock() {
       // Use initial events
       lastPauseEvent = INITIAL_PAUSE_EVENT;
       lastAuctionEvent = INITIAL_AUCTION_EVENT;
+      lastNFTMint = INITIAL_NFT_MINT;
     }
   } catch (err) {
     console.error('Error loading last block:', err.message);
