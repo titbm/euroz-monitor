@@ -92,7 +92,7 @@ const INITIAL_AUCTION_EVENT = {
 const INITIAL_NFT_MINT = {
   hash: '0x28c4d13c35dc8e463cf052c4dc7cf7ff2ca5dbdba49d1155f078eaf2fdc88857',
   block: 9946324,
-  timestamp: 1735588988000, // 2025-12-30T16:43:08Z (approximate)
+  timestamp: 1735575576000, // 2025-12-30T16:29:36Z
   to: '0xB76A0af3440ba1f1a59a38dd5b7a2f1a8d8f8361',
   tokenId: 4
 };
